@@ -4,3 +4,4 @@ version = "0.1.0"
 authors = ["Josh Matthews <josh@joshmatthews.net>"]
 
 [dependencies]
+byteorder = "0.5"
