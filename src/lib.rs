@@ -1,14 +1,21 @@
+extern crate bitreader;
 extern crate byteorder;
 
 use byteorder::{ReadBytesExt, LittleEndian};
-use std::io::{Read, Result as IoResult, Error as IoError};
+use std::io::{Read, Error as IoError, Cursor};
 
-pub struct XNB;
+//mod lzx;
+
+pub struct XNB {
+    buffer: Vec<u8>,
+}
 
 #[derive(Debug)]
 pub enum Error {
     Void,
     Io(IoError),
+    //Decompress(lzx::Error),
+    CompressedXnb,
 }
 
 impl From<IoError> for Error {
@@ -31,41 +38,20 @@ fn read_7bit_encoded_int<R: Read>(rdr: &mut R) -> Result<u8, Error> {
     }
 }
 
-struct StringReader<'a> {
-    buffer: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> StringReader<'a> {
-    fn new(buffer: &[u8]) -> StringReader {
-        StringReader {
-            buffer: buffer,
-            pos: 0,
-        }
-    }
-}
-
-impl<'a> Read for StringReader<'a> {
-    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
-        let expected = buf.len();
-        let actual = if self.buffer.len() - self.pos < expected {
-            self.buffer.len() - self.pos
-        } else {
-            expected
-        };
-        buf.copy_from_slice(&self.buffer[self.pos..self.pos + actual]);
-        self.pos += actual;
-        Ok(actual)
-    }
-}
-
 impl XNB {
-    fn decompress<R: Read>(_rdr: R) -> Result<String, Error> {
-        Ok(String::new())
+    fn decompress<R: Read>(_rdr: R,
+                           _compressed_size: usize,
+                           _decompressed_size: usize) -> Result<Vec<u8>, Error> {
+        //lzx::decompress(rdr, compressed_size, decompressed_size).map_err(|e| Error::Decompress(e))
+        Err(Error::CompressedXnb)
     }
 
-    fn from_uncompressed_buffer<R: Read>(_rdr: R) -> Result<XNB, Error> {
-        Ok(XNB)
+    fn from_uncompressed_buffer<R: Read>(mut rdr: R) -> Result<XNB, Error> {
+        let mut buffer = vec![];
+        try!(rdr.read_to_end(&mut buffer));
+        Ok(XNB {
+            buffer: buffer,
+        })
     }
 
     pub fn from_buffer<R: Read>(mut rdr: R) -> Result<XNB, Error> {
@@ -87,12 +73,14 @@ impl XNB {
         let flag = try!(rdr.read_u8());
         let is_compressed = flag & 0x80 != 0;
 
-        let _compressed_size = try!(rdr.read_u32::<LittleEndian>());
+        let compressed_size = try!(rdr.read_u32::<LittleEndian>());
         
         if is_compressed {
-            let _decompressed_size = try!(rdr.read_u32::<LittleEndian>());
-            let buffer = try!(XNB::decompress(rdr));
-            XNB::from_uncompressed_buffer(StringReader::new(buffer.as_bytes()))
+            let decompressed_size = try!(rdr.read_u32::<LittleEndian>());
+            let buffer = try!(XNB::decompress(rdr,
+                                              compressed_size as usize - 14,
+                                              decompressed_size as usize));
+            XNB::from_uncompressed_buffer(Cursor::new(&buffer))
         } else {
             XNB::from_uncompressed_buffer(rdr)
         }

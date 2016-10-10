@@ -5,3 +5,4 @@ authors = ["Josh Matthews <josh@joshmatthews.net>"]
 
 [dependencies]
 byteorder = "0.5"
+bitreader = "0.1"
