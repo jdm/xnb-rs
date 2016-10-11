@@ -2,6 +2,7 @@ extern crate bitreader;
 extern crate byteorder;
 
 use byteorder::{ReadBytesExt, LittleEndian};
+use std::collections::HashMap;
 use std::io::{Read, Error as IoError, Cursor};
 
 //mod lzx;
@@ -11,11 +12,41 @@ struct TypeReader {
     _version: i32,
 }
 
-fn read_with_reader<R: Read>(name: &str, rdr: &mut R) -> Result<Asset, Error> {
+fn read_with_reader<R: Read>(name: &str, rdr: &mut R, readers: &[TypeReader]) -> Result<Asset, Error> {
     Ok(match name.split(',').next().unwrap() {
-        "Microsoft.Xna.Framework.Content.Texture2DReader" => Asset::Texture2d(try!(Texture2d::new(rdr))),
+        "Microsoft.Xna.Framework.Content.Texture2DReader" =>
+            Asset::Texture2d(try!(Texture2d::new(rdr))),
+        "Microsoft.Xna.Framework.Content.DictionaryReader`2[[System.String" =>
+            Asset::DictionaryString(try!(DictionaryString::new(rdr, readers))),
+        "Microsoft.Xna.Framework.Content.StringReader" =>
+            Asset::String(try!(read_string(rdr))),
         s => return Err(Error::UnknownReader(s.into())),
     })
+}
+
+pub struct DictionaryString {
+    pub map: HashMap<String, String>,
+}
+
+impl DictionaryString {
+    fn new<R: Read>(rdr: &mut R, readers: &[TypeReader]) -> Result<DictionaryString, Error> {
+        let count = try!(rdr.read_u32::<LittleEndian>());
+        let mut map = HashMap::new();
+        for _ in 0..count {
+            let key = match try!(read_object(rdr, readers)) {
+                Asset::String(s) => s,
+                _ => return Err(Error::UnexpectedObject),
+            };
+            let value = match try!(read_object(rdr, readers)) {
+                Asset::String(s) => s,
+                _ => return Err(Error::UnexpectedObject),
+            };
+            map.insert(key, value);
+        }
+        Ok(DictionaryString {
+            map: map,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -102,6 +133,8 @@ impl Texture2d {
 pub enum Asset {
     Null,
     Texture2d(Texture2d),
+    DictionaryString(DictionaryString),
+    String(String),
 }
 
 pub struct XNB {
@@ -119,7 +152,6 @@ impl XNB {
                 _version: try!(rdr.read_i32::<LittleEndian>()),
             });
         }
-        assert_eq!(readers.len(), 1);
         let num_shared = try!(read_7bit_encoded_int(&mut rdr));
         assert_eq!(num_shared, 0);
         let asset = try!(read_object(&mut rdr, &readers));
@@ -134,7 +166,7 @@ fn read_object<R: Read>(rdr: &mut R, readers: &[TypeReader]) -> Result<Asset, Er
     if id == 0 {
         return Ok(Asset::Null);
     }
-    read_with_reader(&readers[id - 1].name, rdr)
+    read_with_reader(&readers[id - 1].name, rdr, readers)
 }
 
 #[derive(Debug)]
@@ -145,6 +177,7 @@ pub enum Error {
     CompressedXnb,
     UnknownReader(String),
     UnrecognizedSurfaceFormat(u32),
+    UnexpectedObject,
 }
 
 impl From<IoError> for Error {

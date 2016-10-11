@@ -42,6 +42,7 @@ fn main() {
 
     match xnb.primary {
         Asset::Null => (),
+
         Asset::Texture2d(texture) => {
             for (i, data) in texture.mip_data.into_iter().enumerate() {
                 let path = format!("data_{}.png", i);
@@ -63,6 +64,16 @@ fn main() {
                     }
                 }
             }
+        }
+
+        Asset::DictionaryString(dict) => {
+            for (key, value) in dict.map {
+                println!("{} => {}", key, value);
+            }
+        }
+
+        Asset::String(s) => {
+            println!("{}", s);
         }
     }
 }
