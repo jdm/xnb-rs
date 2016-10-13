@@ -48,7 +48,7 @@ fn generic_types_from_reader(name: &str) -> Vec<&str> {
 }
 
 fn read_with_reader<R: Read>(name: &str, rdr: &mut R, readers: &[TypeReader]) -> Result<Asset, Error> {
-    let main = name.split('`').next().unwrap();
+    let main = name.split('`').next().unwrap().split(',').next().unwrap();
     let args = generic_types_from_reader(name);
     //println!("reading with {:?}", name);
     Ok(match main {
