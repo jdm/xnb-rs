@@ -3,6 +3,8 @@ extern crate byteorder;
 
 use byteorder::{ReadBytesExt, LittleEndian};
 use std::collections::HashMap;
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::io::{Read, Error as IoError, Cursor};
 
 //mod lzx;
@@ -18,32 +20,78 @@ fn read_with_reader<R: Read>(name: &str, rdr: &mut R, readers: &[TypeReader]) ->
             Asset::Texture2d(try!(Texture2d::new(rdr))),
         "Microsoft.Xna.Framework.Content.DictionaryReader`2[[System.String" =>
             Asset::DictionaryString(try!(DictionaryString::new(rdr, readers))),
+        "Microsoft.Xna.Framework.Content.DictionaryReader`2[[System.Int32" =>
+            Asset::DictionaryInt(try!(DictionaryInt::new(rdr, readers))),
         "Microsoft.Xna.Framework.Content.StringReader" =>
             Asset::String(try!(read_string(rdr))),
+        "Microsoft.Xna.Framework.Content.Int32Reader" =>
+            Asset::Int(try!(rdr.read_i32::<LittleEndian>())),
         s => return Err(Error::UnknownReader(s.into())),
     })
 }
 
-pub struct DictionaryString {
-    pub map: HashMap<String, String>,
+#[derive(Debug)]
+pub struct Dictionary<K: Eq + Hash, V> {
+    pub map: HashMap<K, Option<V>>,
 }
 
-impl DictionaryString {
-    fn new<R: Read>(rdr: &mut R, readers: &[TypeReader]) -> Result<DictionaryString, Error> {
+pub trait DictionaryType {
+    fn inline_reader() -> Option<&'static str>;
+    fn extract(asset: Asset) -> Result<Option<Self>, Asset> where Self: Sized;
+}
+
+pub type DictionaryString = Dictionary<String, String>;
+pub type DictionaryInt = Dictionary<i32, String>;
+
+impl DictionaryType for String {
+    fn inline_reader() -> Option<&'static str> {
+        None
+    }
+
+    fn extract(asset: Asset) -> Result<Option<Self>, Asset> {
+        match asset {
+            Asset::String(s) => Ok(Some(s)),
+            Asset::Null => Ok(None),
+            _ => Err(asset),
+        }
+    }
+}
+
+impl DictionaryType for i32 {
+    fn inline_reader() -> Option<&'static str> {
+        Some("Microsoft.Xna.Framework.Content.Int32Reader")
+    }
+
+    fn extract(asset: Asset) -> Result<Option<Self>, Asset> {
+        match asset {
+            Asset::Int(i) => Ok(Some(i)),
+            Asset::Null => Ok(None),
+            _ => Err(asset),
+        }
+    }
+}
+
+fn read_dictionary_member<T, R>(rdr: &mut R, readers: &[TypeReader])
+                                -> Result<Option<T>, Error> where T: DictionaryType, R: Read {
+    T::extract(try!(if let Some(reader) = T::inline_reader() {
+        read_with_reader(reader, rdr, readers)
+    } else {
+        read_object(rdr, readers)
+    })).map_err(Error::UnexpectedObject)
+}
+
+impl<K: DictionaryType + Eq + Hash + Debug, V: DictionaryType + Debug> Dictionary<K, V> {
+    fn new<R: Read>(rdr: &mut R, readers: &[TypeReader]) -> Result<Dictionary<K, V>, Error> {
         let count = try!(rdr.read_u32::<LittleEndian>());
         let mut map = HashMap::new();
         for _ in 0..count {
-            let key = match try!(read_object(rdr, readers)) {
-                Asset::String(s) => s,
-                _ => return Err(Error::UnexpectedObject),
-            };
-            let value = match try!(read_object(rdr, readers)) {
-                Asset::String(s) => s,
-                _ => return Err(Error::UnexpectedObject),
-            };
-            map.insert(key, value);
+            let key = try!(read_dictionary_member::<K, R>(rdr, readers));
+            let value = try!(read_dictionary_member::<V, R>(rdr, readers));
+            if let Some(key) = key {
+                map.insert(key, value);
+            }
         }
-        Ok(DictionaryString {
+        Ok(Dictionary {
             map: map,
         })
     }
@@ -101,6 +149,7 @@ impl SurfaceFormat {
     }
 }
 
+#[derive(Debug)]
 pub struct Texture2d {
     pub format: SurfaceFormat,
     pub width: usize,
@@ -130,11 +179,14 @@ impl Texture2d {
     }
 }
 
+#[derive(Debug)]
 pub enum Asset {
     Null,
     Texture2d(Texture2d),
     DictionaryString(DictionaryString),
+    DictionaryInt(DictionaryInt),
     String(String),
+    Int(i32),
 }
 
 pub struct XNB {
@@ -177,7 +229,7 @@ pub enum Error {
     CompressedXnb,
     UnknownReader(String),
     UnrecognizedSurfaceFormat(u32),
-    UnexpectedObject,
+    UnexpectedObject(Asset),
 }
 
 impl From<IoError> for Error {
