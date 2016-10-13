@@ -3,96 +3,141 @@ extern crate byteorder;
 
 use byteorder::{ReadBytesExt, LittleEndian};
 use std::collections::HashMap;
-use std::fmt::Debug;
-use std::hash::Hash;
 use std::io::{Read, Error as IoError, Cursor};
 
 //mod lzx;
 
+#[derive(Debug)]
 struct TypeReader {
     name: String,
     _version: i32,
 }
 
+fn generic_types_from_reader(name: &str) -> Vec<&str> {
+    let mut parts = name.split('`');
+    let _main = parts.next().unwrap();
+    let args = parts.next();
+    if let Some(args) = args {
+        let mut count = 0;
+        let mut starts = vec![];
+        let mut ends = vec![];
+        let offset = 2;
+        for (i, c) in args[offset..args.len()].chars().enumerate() {
+            if c == '[' {
+                if count == 0 {
+                    starts.push(i + 1);
+                }
+                count += 1;
+            }
+            if c == ']' {
+                count -= 1;
+                if count == 0 {
+                    ends.push(i);
+                }
+            }
+        }
+        assert_eq!(starts.len(), ends.len());
+        starts.into_iter()
+            .zip(ends.into_iter())
+            .map(|(s, e)| &args[s+offset..e+offset])
+            .map(|s| s.split(',').next().unwrap())
+            .collect()
+    } else {
+        vec![]
+    }
+}
+
 fn read_with_reader<R: Read>(name: &str, rdr: &mut R, readers: &[TypeReader]) -> Result<Asset, Error> {
-    Ok(match name.split(',').next().unwrap() {
+    let main = name.split('`').next().unwrap();
+    let args = generic_types_from_reader(name);
+    //println!("reading with {:?}", name);
+    Ok(match main {
         "Microsoft.Xna.Framework.Content.Texture2DReader" =>
             Asset::Texture2d(try!(Texture2d::new(rdr))),
-        "Microsoft.Xna.Framework.Content.DictionaryReader`2[[System.String" =>
-            Asset::DictionaryString(try!(DictionaryString::new(rdr, readers))),
-        "Microsoft.Xna.Framework.Content.DictionaryReader`2[[System.Int32" =>
-            Asset::DictionaryInt(try!(DictionaryInt::new(rdr, readers))),
+        "Microsoft.Xna.Framework.Content.DictionaryReader" => {
+            //println!("{:?}", args);
+            Asset::Dictionary(try!(Dictionary::new(args[0], args[1], rdr, readers)))
+        }
+        "Microsoft.Xna.Framework.Content.ArrayReader" => {
+            //println!("{:?}", args);
+            Asset::Array(try!(Array::new(args[0], rdr, readers)))
+        }
         "Microsoft.Xna.Framework.Content.StringReader" =>
             Asset::String(try!(read_string(rdr))),
         "Microsoft.Xna.Framework.Content.Int32Reader" =>
             Asset::Int(try!(rdr.read_i32::<LittleEndian>())),
-        s => return Err(Error::UnknownReader(s.into())),
+        _ => return Err(Error::UnknownReader(name.into())),
     })
 }
 
 #[derive(Debug)]
-pub struct Dictionary<K: Eq + Hash, V> {
-    pub map: HashMap<K, Option<V>>,
+pub struct Array {
+    pub vec: Vec<Asset>,
 }
 
-pub trait DictionaryType {
-    fn inline_reader() -> Option<&'static str>;
-    fn extract(asset: Asset) -> Result<Option<Self>, Asset> where Self: Sized;
+#[derive(Debug)]
+pub struct Dictionary {
+    pub map: HashMap<DictionaryKey, Asset>,
 }
 
-pub type DictionaryString = Dictionary<String, String>;
-pub type DictionaryInt = Dictionary<i32, String>;
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub enum DictionaryKey {
+    Int(i32),
+    String(String),
+}
 
-impl DictionaryType for String {
-    fn inline_reader() -> Option<&'static str> {
-        None
-    }
-
-    fn extract(asset: Asset) -> Result<Option<Self>, Asset> {
-        match asset {
-            Asset::String(s) => Ok(Some(s)),
-            Asset::Null => Ok(None),
-            _ => Err(asset),
-        }
+fn reader_from_type(typename: &str) -> Option<&'static str> {
+    match typename {
+        "System.Int32" => Some("Microsoft.Xna.Framework.Content.Int32Reader"),
+        _ => None,
     }
 }
 
-impl DictionaryType for i32 {
-    fn inline_reader() -> Option<&'static str> {
-        Some("Microsoft.Xna.Framework.Content.Int32Reader")
-    }
-
-    fn extract(asset: Asset) -> Result<Option<Self>, Asset> {
-        match asset {
-            Asset::Int(i) => Ok(Some(i)),
-            Asset::Null => Ok(None),
-            _ => Err(asset),
-        }
-    }
-}
-
-fn read_dictionary_member<T, R>(rdr: &mut R, readers: &[TypeReader])
-                                -> Result<Option<T>, Error> where T: DictionaryType, R: Read {
-    T::extract(try!(if let Some(reader) = T::inline_reader() {
+fn read_dictionary_member<R: Read>(typename: &str, rdr: &mut R, readers: &[TypeReader])
+                                   -> Result<Asset, Error> {
+    if let Some(reader) = reader_from_type(typename) {
         read_with_reader(reader, rdr, readers)
     } else {
         read_object(rdr, readers)
-    })).map_err(Error::UnexpectedObject)
+    }
 }
 
-impl<K: DictionaryType + Eq + Hash + Debug, V: DictionaryType + Debug> Dictionary<K, V> {
-    fn new<R: Read>(rdr: &mut R, readers: &[TypeReader]) -> Result<Dictionary<K, V>, Error> {
+fn key_from_asset(asset: Asset) -> DictionaryKey {
+    match asset {
+        Asset::Int(i) => DictionaryKey::Int(i),
+        Asset::String(s) => DictionaryKey::String(s),
+        a => panic!("unsupported dictionary key {:?}", a)
+    }
+}
+
+impl Dictionary {
+    fn new<R: Read>(keytype: &str,
+                    valtype: &str,
+                    rdr: &mut R,
+                    readers: &[TypeReader]) -> Result<Dictionary, Error> {
         let count = try!(rdr.read_u32::<LittleEndian>());
         let mut map = HashMap::new();
         for _ in 0..count {
-            let key = try!(read_dictionary_member::<K, R>(rdr, readers));
-            let value = try!(read_dictionary_member::<V, R>(rdr, readers));
-            if let Some(key) = key {
-                map.insert(key, value);
-            }
+            let key = key_from_asset(try!(read_dictionary_member(keytype, rdr, readers)));
+            let value = try!(read_dictionary_member(valtype, rdr, readers));
+            map.insert(key, value);
         }
         Ok(Dictionary {
             map: map,
+        })
+    }
+}
+
+impl Array {
+    fn new<R: Read>(typename: &str, rdr: &mut R, readers: &[TypeReader]) -> Result<Array, Error> {
+        let count = try!(rdr.read_u32::<LittleEndian>());
+        let mut vec = vec![];
+        for _ in 0..count {
+            let val = try!(read_dictionary_member(typename, rdr, readers));
+            vec.push(val);
+        }
+        Ok(Array {
+            vec: vec,
         })
     }
 }
@@ -183,8 +228,8 @@ impl Texture2d {
 pub enum Asset {
     Null,
     Texture2d(Texture2d),
-    DictionaryString(DictionaryString),
-    DictionaryInt(DictionaryInt),
+    Dictionary(Dictionary),
+    Array(Array),
     String(String),
     Int(i32),
 }

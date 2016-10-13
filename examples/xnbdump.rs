@@ -66,16 +66,18 @@ fn main() {
             }
         }
 
-        Asset::DictionaryString(dict) => {
+        Asset::Dictionary(dict) => {
             for (key, value) in dict.map {
                 println!("{:?} => {:?}", key, value);
             }
         }
 
-        Asset::DictionaryInt(dict) => {
-            for (key, value) in dict.map {
-                println!("{:?} => {:?}", key, value);
+        Asset::Array(array) => {
+            print!("[");
+            for val in array.vec {
+                println!("{:?}, ", val);
             }
+            print!("]");
         }
 
         Asset::String(s) => {
