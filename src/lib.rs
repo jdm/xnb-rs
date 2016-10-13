@@ -118,8 +118,10 @@ impl Dictionary {
         let count = try!(rdr.read_u32::<LittleEndian>());
         let mut map = HashMap::new();
         for _ in 0..count {
+            //println!("getting item {}/{}", i + 1, count);
             let key = key_from_asset(try!(read_dictionary_member(keytype, rdr, readers)));
             let value = try!(read_dictionary_member(valtype, rdr, readers));
+            //println!("got {:?} => {:?}", key, value);
             map.insert(key, value);
         }
         Ok(Dictionary {
@@ -290,6 +292,7 @@ fn read_string<R: Read>(rdr: &mut R) -> Result<String, Error> {
         let val = try!(rdr.read_u8());
         s.push(val as char);
     }
+    assert_eq!(s.len(), len as usize);
     Ok(s)
 }
 
@@ -299,7 +302,7 @@ fn read_7bit_encoded_int<R: Read>(rdr: &mut R) -> Result<u32, Error> {
     let mut bits_read = 0;
     loop {
         let value = try!(rdr.read_u8());
-        result |= ((value & 0x7F) << bits_read) as u32;
+        result |= ((value & 0x7F) as u32) << bits_read;
         bits_read += 7;
         if value & 0x80 == 0 {
             return Ok(result);
