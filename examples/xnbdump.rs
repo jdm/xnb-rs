@@ -87,5 +87,9 @@ fn main() {
         Asset::Int(i) => {
             println!("{}", i);
         }
+
+        Asset::Tide(_bytes) => {
+            //println!("{:?}", bytes);
+        }
     }
 }

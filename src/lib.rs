@@ -5,6 +5,7 @@ use byteorder::{ReadBytesExt, LittleEndian};
 use std::collections::HashMap;
 use std::io::{Read, Error as IoError, Cursor};
 
+mod tide;
 //mod lzx;
 
 #[derive(Debug)]
@@ -66,6 +67,8 @@ fn read_with_reader<R: Read>(name: &str, rdr: &mut R, readers: &[TypeReader]) ->
             Asset::String(try!(read_string(rdr))),
         "Microsoft.Xna.Framework.Content.Int32Reader" =>
             Asset::Int(try!(rdr.read_i32::<LittleEndian>())),
+        "xTile.Pipeline.TideReader" => /*, xTile */
+            Asset::Tide(try!(tide::read_tide(rdr))),
         _ => return Err(Error::UnknownReader(name.into())),
     })
 }
@@ -230,6 +233,7 @@ impl Texture2d {
 pub enum Asset {
     Null,
     Texture2d(Texture2d),
+    Tide(Vec<u8>),
     Dictionary(Dictionary),
     Array(Array),
     String(String),
@@ -287,6 +291,10 @@ impl From<IoError> for Error {
 
 fn read_string<R: Read>(rdr: &mut R) -> Result<String, Error> {
     let len = try!(read_7bit_encoded_int(rdr));
+    read_string_with_length(rdr, len)
+}
+
+fn read_string_with_length<R: Read>(rdr: &mut R, len: u32) -> Result<String, Error> {
     let mut s = String::new();
     for _ in 0..len {
         let val = try!(rdr.read_u8());
