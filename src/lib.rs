@@ -233,7 +233,7 @@ impl Texture2d {
 pub enum Asset {
     Null,
     Texture2d(Texture2d),
-    Tide(Vec<u8>),
+    Tide(tide::Map),
     Dictionary(Dictionary),
     Array(Array),
     String(String),
