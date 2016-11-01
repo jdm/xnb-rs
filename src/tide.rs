@@ -4,18 +4,18 @@ use std::io::{Read, Cursor};
 
 #[derive(Debug)]
 pub struct TileSheet {
-    id: String,
-    description: String,
-    image_source: String,
-    sheet_size: (u32, u32),
-    tile_size: (u32, u32),
-    margin: (u32, u32),
-    spacing: (u32, u32),
-    properties: Vec<(String, PropertyValue)>,
+    pub id: String,
+    pub description: String,
+    pub image_source: String,
+    pub sheet_size: (u32, u32),
+    pub tile_size: (u32, u32),
+    pub margin: (u32, u32),
+    pub spacing: (u32, u32),
+    pub properties: Vec<(String, PropertyValue)>,
 }
 
 #[derive(Debug)]
-enum PropertyValue {
+pub enum PropertyValue {
     Bool(bool),
     Int(i32),
     Float(f32),
@@ -48,11 +48,11 @@ fn read_tide_properties<R: Read>(rdr: &mut R) -> Result<Vec<(String, PropertyVal
 
 #[derive(Debug)]
 pub struct StaticTile {
-    tilesheet: String,
-    idx: u32,
-    pos: (u32, u32),
-    blend_mode: u8,
-    properties: Vec<(String, PropertyValue)>,
+    pub tilesheet: String,
+    pub idx: u32,
+    pub pos: (u32, u32),
+    pub blend_mode: u8,
+    pub properties: Vec<(String, PropertyValue)>,
 }
 
 fn read_static_tile<R: Read>(rdr: &mut R, tilesheet: String, pos: (u32, u32)) -> Result<StaticTile, Error> {
@@ -68,6 +68,7 @@ fn read_static_tile<R: Read>(rdr: &mut R, tilesheet: String, pos: (u32, u32)) ->
     })
 }
 
+#[allow(dead_code)]
 fn print_properties(properties: Vec<(String, PropertyValue)>) {
     for (name, value) in properties {
         println!("{} = {:?}", name, value);
@@ -76,22 +77,22 @@ fn print_properties(properties: Vec<(String, PropertyValue)>) {
 
 #[derive(Debug)]
 pub struct Map {
-    id: String,
-    description: String,
-    tilesheets: Vec<TileSheet>,
-    layers: Vec<Layer>,
-    properties: Vec<(String, PropertyValue)>,
+    pub id: String,
+    pub description: String,
+    pub tilesheets: Vec<TileSheet>,
+    pub layers: Vec<Layer>,
+    pub properties: Vec<(String, PropertyValue)>,
 }
 
 #[derive(Debug)]
 pub struct Layer {
-    id: String,
-    description: String,
-    tiles: Vec<Tile>,
-    visible: bool,
-    size: (u32, u32),
-    tile_size: (u32, u32),
-    properties: Vec<(String, PropertyValue)>,
+    pub id: String,
+    pub description: String,
+    pub tiles: Vec<Tile>,
+    pub visible: bool,
+    pub size: (u32, u32),
+    pub tile_size: (u32, u32),
+    pub properties: Vec<(String, PropertyValue)>,
 }
 
 #[derive(Debug)]
@@ -100,12 +101,35 @@ pub enum Tile {
     Animated(AnimatedTile),
 }
 
+impl Tile {
+    pub fn get_index(&self) -> u32 {
+        match *self {
+            Tile::Static(ref tile) => tile.idx,
+            Tile::Animated(ref tile) => tile.frames[0].idx,
+        }
+    }
+
+    pub fn get_tilesheet(&self) -> &str {
+        match *self {
+            Tile::Static(ref tile) => &tile.tilesheet,
+            Tile::Animated(ref tile) => &tile.frames[0].tilesheet,
+        }
+    }
+
+    pub fn get_pos(&self) -> (u32, u32) {
+        match *self {
+            Tile::Static(ref tile) => tile.pos,
+            Tile::Animated(ref tile) => tile.frames[0].pos,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct AnimatedTile {
-    interval: u32,
-    pos: (u32, u32),
-    frames: Vec<StaticTile>,
-    properties: Vec<(String, PropertyValue)>,
+    pub interval: u32,
+    pub pos: (u32, u32),
+    pub frames: Vec<StaticTile>,
+    pub properties: Vec<(String, PropertyValue)>,
 }
 
 pub fn read_tide<R: Read>(rdr: &mut R) -> Result<Map, Error> {

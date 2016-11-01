@@ -5,7 +5,7 @@ use byteorder::{ReadBytesExt, LittleEndian};
 use std::collections::HashMap;
 use std::io::{Read, Error as IoError, Cursor};
 
-mod tide;
+pub mod tide;
 //mod lzx;
 
 #[derive(Debug)]
