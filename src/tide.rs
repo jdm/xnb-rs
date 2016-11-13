@@ -101,10 +101,10 @@ pub enum Tile {
 }
 
 impl Tile {
-    pub fn get_index(&self) -> u32 {
+    pub fn get_index(&self, tick: u32) -> u32 {
         match *self {
             Tile::Static(ref tile) => tile.idx,
-            Tile::Animated(ref tile) => tile.frames[0].idx,
+            Tile::Animated(ref tile) => tile.frames[(tick / tile.interval) as usize % tile.frames.len()].idx,
         }
     }
 
