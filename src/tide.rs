@@ -68,9 +68,8 @@ fn read_static_tile<R: Read>(rdr: &mut R, tilesheet: String, pos: (u32, u32)) ->
     })
 }
 
-#[allow(dead_code)]
-fn print_properties(properties: Vec<(String, PropertyValue)>) {
-    for (name, value) in properties {
+pub fn print_properties(properties: &[(String, PropertyValue)]) {
+    for &(ref name, ref value) in properties {
         println!("{} = {:?}", name, value);
     }
 }
