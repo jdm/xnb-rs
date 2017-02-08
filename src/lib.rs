@@ -59,14 +59,25 @@ fn read_with_reader<R: Read>(name: &str, rdr: &mut R, readers: &[TypeReader]) ->
             //println!("{:?}", args);
             Asset::Dictionary(try!(Dictionary::new(args[0], args[1], rdr, readers)))
         }
-        "Microsoft.Xna.Framework.Content.ArrayReader" => {
+        "Microsoft.Xna.Framework.Content.ArrayReader" |
+        "Microsoft.Xna.Framework.Content.ListReader" => {
             //println!("{:?}", args);
             Asset::Array(try!(Array::new(args[0], rdr, readers)))
         }
+        "Microsoft.Xna.Framework.Content.Vector3Reader" =>
+            Asset::Vector3(try!(rdr.read_f32::<LittleEndian>()),
+                           try!(rdr.read_f32::<LittleEndian>()),
+                           try!(rdr.read_f32::<LittleEndian>())),
         "Microsoft.Xna.Framework.Content.StringReader" =>
             Asset::String(try!(read_string(rdr))),
         "Microsoft.Xna.Framework.Content.Int32Reader" =>
             Asset::Int(try!(rdr.read_i32::<LittleEndian>())),
+        "Microsoft.Xna.Framework.Content.CharReader" =>
+            Asset::Char(try!(rdr.read_u8()) as char), //XXXjdm should be full UTF-8 char read
+        "Microsoft.Xna.Framework.Content.RectangleReader" =>
+            Asset::Rectangle(try!(Rectangle::new(rdr))),
+        "Microsoft.Xna.Framework.Content.SpriteFontReader" =>
+            Asset::Font(try!(SpriteFont::new(rdr, readers))),
         "xTile.Pipeline.TideReader" => /*, xTile */
             Asset::Tide(try!(tide::read_tide(rdr))),
         _ => return Err(Error::UnknownReader(name.into())),
@@ -92,12 +103,16 @@ pub enum DictionaryKey {
 fn reader_from_type(typename: &str) -> Option<&'static str> {
     match typename {
         "System.Int32" => Some("Microsoft.Xna.Framework.Content.Int32Reader"),
+        "System.Char" => Some("Microsoft.Xna.Framework.Content.CharReader"),
+        "Microsoft.Xna.Framework.Vector3" => Some("Microsoft.Xna.Framework.Content.Vector3Reader"),
+        "Microsoft.Xna.Framework.Rectangle" => Some("Microsoft.Xna.Framework.Content.RectangleReader"),
         _ => None,
     }
 }
 
 fn read_dictionary_member<R: Read>(typename: &str, rdr: &mut R, readers: &[TypeReader])
                                    -> Result<Asset, Error> {
+    //println!("checking {}" ,typename);
     if let Some(reader) = reader_from_type(typename) {
         read_with_reader(reader, rdr, readers)
     } else {
@@ -230,6 +245,92 @@ impl Texture2d {
 }
 
 #[derive(Debug)]
+pub struct SpriteFont {
+    pub texture: Texture2d,
+    pub glyphs: Vec<Rectangle>,
+    pub cropping: Vec<Rectangle>,
+    pub char_map: Vec<char>,
+    pub v_spacing: i32,
+    pub h_spacing: f32,
+    pub kerning: Vec<(f32, f32, f32)>,
+    pub default: Option<char>,
+}
+
+fn extract_rects(v: Vec<Asset>) -> Vec<Rectangle> {
+    v.into_iter().map(|e| match e {
+        Asset::Rectangle(r) => r,
+        _ => panic!("Unexpected asset in vector of rectangles"),
+    }).collect()
+}
+
+impl SpriteFont {
+    fn new<R: Read>(rdr: &mut R, readers: &[TypeReader]) -> Result<SpriteFont, Error> {
+        let texture = match try!(read_object(rdr, readers)) {
+            Asset::Texture2d(t) => t,
+            _ => panic!("Unexpected asset for texture"),
+        };
+        let glyphs = match try!(read_object(rdr, readers)) {
+            Asset::Array(a) => extract_rects(a.vec),
+            _ => panic!("Unexpected asset for glyphs"),
+        };
+        let cropping = match try!(read_object(rdr, readers)) {
+            Asset::Array(a) => extract_rects(a.vec),
+            _ => panic!("Unexpected asset for cropping"),
+        };
+        let char_map = match try!(read_object(rdr, readers)) {
+            Asset::Array(a) => a.vec.into_iter().map(|e| match e {
+                Asset::Char(c) => c,
+                _ => panic!("Unexpected asset in vector of chars"),
+            }).collect(),
+            _ => panic!("Unexpected asset for char_map"),
+        };
+        let v_spacing = try!(rdr.read_i32::<LittleEndian>());
+        let h_spacing = try!(rdr.read_f32::<LittleEndian>());
+        let kerning = match try!(read_object(rdr, readers)) {
+            Asset::Array(a) => a.vec.into_iter().map(|e| match e {
+                Asset::Vector3(x, y, z) => (x, y, z),
+                _ => panic!("Unexpected asset in vector of vec3"),
+            }).collect(),
+            _ => panic!("Unexpected asset for kerning"),
+        };
+        //XXXjdm should be full UTF-8 char read
+        let default = try!(read_nullable(rdr, |rdr| rdr.read_u8().map(|b| Asset::Char(b as char)).map_err(Error::Io))).map(|a| match a {
+            Asset::Char(c) => c,
+            _ => panic!("Unexpected asset in nullable char"),
+        });
+        Ok(SpriteFont {
+            texture: texture,
+            glyphs: glyphs,
+            cropping: cropping,
+            char_map: char_map,
+            v_spacing: v_spacing,
+            h_spacing: h_spacing,
+            kerning: kerning,
+            default: default,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct Rectangle {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+impl Rectangle {
+    fn new<R: Read>(rdr: &mut R) -> Result<Rectangle, Error> {
+        Ok(Rectangle {
+            x: try!(rdr.read_i32::<LittleEndian>()),
+            y: try!(rdr.read_i32::<LittleEndian>()),
+            w: try!(rdr.read_i32::<LittleEndian>()),
+            h: try!(rdr.read_i32::<LittleEndian>()),
+        })
+    }
+}
+
+#[derive(Debug)]
 pub enum Asset {
     Null,
     Texture2d(Texture2d),
@@ -238,6 +339,10 @@ pub enum Asset {
     Array(Array),
     String(String),
     Int(i32),
+    Char(char),
+    Vector3(f32, f32, f32),
+    Font(SpriteFont),
+    Rectangle(Rectangle),
 }
 
 pub struct XNB {
@@ -254,6 +359,7 @@ impl XNB {
                 name: try!(read_string(&mut rdr)),
                 _version: try!(rdr.read_i32::<LittleEndian>()),
             });
+            //println!("reader: {}", readers.last().unwrap().name);
         }
         let num_shared = try!(read_7bit_encoded_int(&mut rdr));
         assert_eq!(num_shared, 0);
@@ -270,6 +376,14 @@ fn read_object<R: Read>(rdr: &mut R, readers: &[TypeReader]) -> Result<Asset, Er
         return Ok(Asset::Null);
     }
     read_with_reader(&readers[id - 1].name, rdr, readers)
+}
+
+fn read_nullable<R: Read, F: Fn(&mut R) -> Result<Asset, Error>>(rdr: &mut R, value: F) -> Result<Option<Asset>, Error> {
+    let has_value = try!(rdr.read_u8()) == 1;
+    if !has_value {
+        return Ok(None);
+    }
+    value(rdr).map(Option::Some)
 }
 
 #[derive(Debug)]

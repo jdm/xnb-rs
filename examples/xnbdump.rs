@@ -1,12 +1,14 @@
 extern crate image;
+extern crate squish;
 extern crate xnb;
 
-use image::{DynamicImage, ImageFormat, RgbaImage};
+use image::{DynamicImage, ImageFormat, ImageBuffer};
 use std::env;
 use std::fs::File;
 use std::io::BufReader;
 use std::process;
-use xnb::{XNB, Asset, tide};
+use squish::{decompress_image, CompressType};
+use xnb::{XNB, Asset, tide, Texture2d, SurfaceFormat};
 
 fn usage() {
     println!("xnbdump [file.xnb]");
@@ -44,26 +46,7 @@ fn main() {
         Asset::Null => (),
 
         Asset::Texture2d(texture) => {
-            for (i, data) in texture.mip_data.into_iter().enumerate() {
-                let path = format!("data_{}.png", i);
-                match File::create(&path) {
-                    Ok(mut f) => {
-                        let img = RgbaImage::from_raw(texture.width as u32,
-                                                     texture.height as u32,
-                                                     data).unwrap();
-                        let dynamic_image = DynamicImage::ImageRgba8(img);
-                        if let Err(e) = dynamic_image.save(&mut f, ImageFormat::PNG) {
-                            println!("Error saving PNG: {}", e);
-                            return err();
-                        }
-                    }
-
-                    Err(e) => {
-                        println!("Error creating file {}: {}", path, e);
-                        return err();
-                    }
-                }
-            }
+            dump_texture(texture);
         }
 
         Asset::Dictionary(dict) => {
@@ -88,6 +71,30 @@ fn main() {
             println!("{}", i);
         }
 
+        Asset::Vector3(x, y, z) => {
+            println!("({}, {}, {})", x, y, z);
+        }
+
+        Asset::Rectangle(r) => {
+            println!("({}, {}) x ({}, {})", r.x, r.y, r.w, r.h);
+        }
+
+        Asset::Char(c) => {
+            println!("{}", c);
+        }
+
+        Asset::Font(f) => {
+            dump_texture(f.texture);
+            println!("glyphs, cropping, char_map:");
+            for ((g, c), m) in f.glyphs.into_iter().zip(f.cropping.into_iter()).zip(f.char_map.into_iter()) {
+                println!("{:?} {:?} {}", g, c, m);
+            }
+            println!("v_space: {}", f.v_spacing);
+            println!("h_space: {}", f.h_spacing);
+            println!("kerning: {} elements", f.kerning.len());
+            println!("default: {:?}", f.default);
+        }
+
         Asset::Tide(map) => {
             tide::print_properties(&map.properties);
             for ts in &map.tilesheets {
@@ -107,6 +114,42 @@ fn main() {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+fn dump_texture(texture: Texture2d) {
+    for (i, data) in texture.mip_data.into_iter().enumerate() {
+        let path = format!("data_{}.png", i);
+        match File::create(&path) {
+            Ok(mut f) => {
+                let dynamic_image = {
+                    let data = match texture.format {
+                        SurfaceFormat::Color => data,
+                        SurfaceFormat::Dxt3 => {
+                            decompress_image(texture.width as i32,
+                                             texture.height as i32,
+                                             data.as_ptr() as *const _,
+                                             CompressType::Dxt3)
+                        }
+                        f => panic!("can't handle surface format {:?}", f),
+                    };
+
+                    let img = ImageBuffer::from_raw(texture.width as u32,
+                                                    texture.height as u32,
+                                                    data).unwrap();
+                    DynamicImage::ImageRgba8(img)
+                };
+                if let Err(e) = dynamic_image.save(&mut f, ImageFormat::PNG) {
+                    println!("Error saving PNG: {}", e);
+                    return err();
+                }
+            }
+
+            Err(e) => {
+                println!("Error creating file {}: {}", path, e);
+                return err();
             }
         }
     }

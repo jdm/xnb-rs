@@ -9,3 +9,4 @@ bitreader = "0.1"
 
 [dev_dependencies]
 image = "0.10"
+squish = {path = "../squish-rs"}
