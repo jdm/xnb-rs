@@ -96,21 +96,36 @@ fn main() {
         }
 
         Asset::Tide(map) => {
-            tide::print_properties(&map.properties);
+            if !map.properties.is_empty() {
+                println!("Map properties:");
+                tide::print_properties(&map.properties);
+            }
             for ts in &map.tilesheets {
-                tide::print_properties(&ts.properties);
+                if !ts.properties.is_empty() {
+                    println!("Tilesheet {} properties:", ts.id);
+                    tide::print_properties(&ts.properties);
+                }
             }
             for layer in &map.layers {
-                tide::print_properties(&layer.properties);
+                if !layer.properties.is_empty() {
+                    println!("Layer {} properties:", layer.id);
+                    tide::print_properties(&layer.properties);
+                }
                 for tile in &layer.tiles {
                     match *tile {
                         tide::Tile::Animated(ref tile) => {
                             for tile in &tile.frames {
-                                tide::print_properties(&tile.properties);
+                                if !tile.properties.is_empty() {
+                                    println!("Tile {} properties:", tile.idx);
+                                    tide::print_properties(&tile.properties);
+                                }
                             }
                         }
                         tide::Tile::Static(ref tile) => {
-                            tide::print_properties(&tile.properties);
+                            if !tile.properties.is_empty() {
+                                println!("Tile {} properties:", tile.idx);
+                                tide::print_properties(&tile.properties);
+                            }
                         }
                     }
                 }
