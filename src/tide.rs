@@ -3,7 +3,7 @@ use {read_string_with_length, Error, Parse, TypeReader};
 use std::io::{Read, Cursor};
 
 #[derive(Debug)]
-pub struct TileSheet {
+pub struct TileSheet<T> {
     pub id: String,
     pub description: String,
     pub image_source: String,
@@ -11,7 +11,7 @@ pub struct TileSheet {
     pub tile_size: (u32, u32),
     pub margin: (u32, u32),
     pub spacing: (u32, u32),
-    pub properties: Vec<(String, PropertyValue)>,
+    pub properties: T,
 }
 
 #[derive(Debug)]
@@ -22,12 +22,12 @@ pub enum PropertyValue {
     String(String),
 }
 
-fn read_tide_string<R: Read>(rdr: &mut R) -> Result<String, Error> {
+fn read_tide_string(rdr: &mut Read) -> Result<String, Error> {
     let len = try!(rdr.read_u32::<LittleEndian>());
     read_string_with_length(rdr, len)
 }
 
-fn read_tide_properties<R: Read>(rdr: &mut R) -> Result<Vec<(String, PropertyValue)>, Error> {
+fn read_tide_properties(rdr: &mut Read) -> Result<Vec<(String, PropertyValue)>, Error> {
     let num_properties = try!(rdr.read_u32::<LittleEndian>());
 
     let mut props = vec![];
@@ -47,18 +47,18 @@ fn read_tide_properties<R: Read>(rdr: &mut R) -> Result<Vec<(String, PropertyVal
 }
 
 #[derive(Debug)]
-pub struct StaticTile {
+pub struct StaticTile<T> {
     pub tilesheet: String,
     pub idx: u32,
     pub pos: (u32, u32),
     pub blend_mode: u8,
-    pub properties: Vec<(String, PropertyValue)>,
+    pub properties: T,
 }
 
-fn read_static_tile<R: Read>(rdr: &mut R, tilesheet: String, pos: (u32, u32)) -> Result<StaticTile, Error> {
+fn read_static_tile<T: PropertyParse>(rdr: &mut Read, tilesheet: String, pos: (u32, u32)) -> Result<StaticTile<T>, Error> {
     let idx = try!(rdr.read_u32::<LittleEndian>());
     let blend_mode = try!(rdr.read_u8());
-    let properties = try!(read_tide_properties(rdr));
+    let properties = T::parse(try!(read_tide_properties(rdr)));
     Ok(StaticTile {
         idx: idx,
         tilesheet: tilesheet,
@@ -74,16 +74,26 @@ pub fn print_properties(properties: &[(String, PropertyValue)]) {
     }
 }
 
-#[derive(Debug)]
-pub struct Map {
-    pub id: String,
-    pub description: String,
-    pub tilesheets: Vec<TileSheet>,
-    pub layers: Vec<Layer>,
-    pub properties: Vec<(String, PropertyValue)>,
+pub trait PropertyParse {
+    fn parse(props: Vec<(String, PropertyValue)>) -> Self;
 }
 
-impl Parse for Map {
+#[derive(Debug)]
+pub struct Map<T, U, V, W> {
+    pub id: String,
+    pub description: String,
+    pub tilesheets: Vec<TileSheet<U>>,
+    pub layers: Vec<Layer<V, W>>,
+    pub properties: T,
+}
+
+impl<T, U, V, W> Map<T, U, V, W> {
+    pub fn tilesheet(&self, sheet: &str) -> Option<&TileSheet<U>> {
+        self.tilesheets.iter().find(|t| t.id == sheet)
+    }
+}
+
+impl<T: PropertyParse, U: PropertyParse, V: PropertyParse, W: PropertyParse> Parse for Map<T, U, V, W> {
     const READER: &'static str = "xTile.Pipeline.TideReader";
     fn try_parse(rdr: &mut Read, _readers: &[TypeReader], _args: Vec<&str>) -> Result<Self, Error> {
         read_tide(rdr)
@@ -91,23 +101,23 @@ impl Parse for Map {
 }
 
 #[derive(Debug)]
-pub struct Layer {
+pub struct Layer<T, U> {
     pub id: String,
     pub description: String,
-    pub tiles: Vec<Tile>,
+    pub tiles: Vec<Tile<U>>,
     pub visible: bool,
     pub size: (u32, u32),
     pub tile_size: (u32, u32),
-    pub properties: Vec<(String, PropertyValue)>,
+    pub properties: T,
 }
 
 #[derive(Debug)]
-pub enum Tile {
-    Static(StaticTile),
-    Animated(AnimatedTile),
+pub enum Tile<T> {
+    Static(StaticTile<T>),
+    Animated(AnimatedTile<T>),
 }
 
-impl Tile {
+impl<T> Tile<T> {
     pub fn get_index(&self, tick: u32) -> u32 {
         match *self {
             Tile::Static(ref tile) => tile.idx,
@@ -128,17 +138,31 @@ impl Tile {
             Tile::Animated(ref tile) => tile.frames[0].pos,
         }
     }
+
+    pub fn properties(&self) -> &T {
+        match *self {
+            Tile::Static(ref tile) => &tile.properties,
+            Tile::Animated(ref tile) => &tile.properties,
+        }
+    }
 }
 
 #[derive(Debug)]
-pub struct AnimatedTile {
+pub struct AnimatedTile<T> {
     pub interval: u32,
     pub pos: (u32, u32),
-    pub frames: Vec<StaticTile>,
-    pub properties: Vec<(String, PropertyValue)>,
+    pub frames: Vec<StaticTile<T>>,
+    pub properties: T,
 }
 
-pub fn read_tide(rdr: &mut Read) -> Result<Map, Error> {
+pub fn read_tide<T, U, V, W>(
+    rdr: &mut Read
+) -> Result<Map<T, U, V, W>, Error>
+    where T: PropertyParse,
+          U: PropertyParse,
+          V: PropertyParse,
+          W: PropertyParse,
+{
     let size = try!(rdr.read_u32::<LittleEndian>());
     let mut buf = vec![0; size as usize];
     try!(rdr.read(&mut buf));
@@ -159,7 +183,7 @@ pub fn read_tide(rdr: &mut Read) -> Result<Map, Error> {
         println!("{}", map_description);
     }
 
-    let properties = try!(read_tide_properties(&mut rdr));
+    let properties = T::parse(try!(read_tide_properties(&mut rdr)));
 
     let mut tilesheets = vec![];
 
@@ -192,7 +216,7 @@ pub fn read_tide(rdr: &mut Read) -> Result<Map, Error> {
         let spacing_h = try!(rdr.read_u32::<LittleEndian>());
         println!("{}x{}", spacing_w, spacing_h);
 
-        let properties = try!(read_tide_properties(&mut rdr));
+        let properties = U::parse(try!(read_tide_properties(&mut rdr)));
         tilesheets.push(TileSheet {
             id: tilesheet_name,
             description: description,
@@ -227,7 +251,7 @@ pub fn read_tide(rdr: &mut Read) -> Result<Map, Error> {
         let tile_h = try!(rdr.read_u32::<LittleEndian>());
         println!("{}x{}", tile_w, tile_h);
 
-        let properties = try!(read_tide_properties(&mut rdr));
+        let properties = V::parse(try!(read_tide_properties(&mut rdr)));
 
         let mut tiles = vec![];
         let mut tileset = None;
@@ -264,7 +288,7 @@ pub fn read_tide(rdr: &mut Read) -> Result<Map, Error> {
                                 _ => unreachable!("unexpected animated frame type"),
                             }
                         }
-                        let properties = try!(read_tide_properties(&mut rdr));
+                        let properties = W::parse(try!(read_tide_properties(&mut rdr)));
                         tiles.push(Tile::Animated(AnimatedTile {
                             interval: interval,
                             frames: frames,
