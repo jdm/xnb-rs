@@ -3,13 +3,14 @@ extern crate byteorder;
 
 use byteorder::{ReadBytesExt, LittleEndian};
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::io::{Read, Error as IoError, Cursor};
 
 pub mod tide;
 //mod lzx;
 
 #[derive(Debug)]
-struct TypeReader {
+pub struct TypeReader {
     name: String,
     _version: i32,
 }
@@ -48,50 +49,104 @@ fn generic_types_from_reader(name: &str) -> Vec<&str> {
     }
 }
 
-fn read_with_reader<R: Read>(name: &str, rdr: &mut R, readers: &[TypeReader]) -> Result<Asset, Error> {
+pub trait Parse: Sized {
+    const READER: &'static str;
+    fn try_parse(_rdr: &mut Read, _readers: &[TypeReader], _args: Vec<&str>) -> Result<Self, Error>;
+    fn parse(name: &str, rdr: &mut Read, readers: &[TypeReader], args: Vec<&str>) -> Result<Self, Error> {
+        if name != Self::READER {
+            return Err(Error::ReaderMismatch(name.to_string(), Self::READER.to_string()));
+        }
+        Self::try_parse(rdr, readers, args)
+    }
+}
+
+impl Parse for Texture2d {
+    const READER: &'static str = "Microsoft.Xna.Framework.Content.Texture2DReader";
+    fn try_parse(rdr: &mut Read, _readers: &[TypeReader], _args: Vec<&str>) -> Result<Self, Error> {
+        Texture2d::new(rdr)
+    }
+}
+
+impl<T: Parse> Parse for Vec<T> {
+    //TODO: support list reader too: "Microsoft.Xna.Framework.Content.ListReader"
+    const READER: &'static str = "Microsoft.Xna.Framework.Content.ArrayReader";
+    fn try_parse(rdr: &mut Read, readers: &[TypeReader], args: Vec<&str>) -> Result<Self, Error> {
+        let count = try!(rdr.read_u32::<LittleEndian>());
+        let mut vec = vec![];
+        for _ in 0..count {
+            let val = try!(read_dictionary_member(args[0], rdr, readers));
+            vec.push(val);
+        }
+        Ok(vec)
+    }
+}
+
+impl<K: Parse + Eq + Hash, V: Parse> Parse for Dictionary<K, V> {
+    const READER: &'static str = "Microsoft.Xna.Framework.Content.DictionaryReader";
+    fn try_parse(rdr: &mut Read, readers: &[TypeReader], args: Vec<&str>) -> Result<Self, Error> {
+        Dictionary::new(args[0], args[1], rdr, readers)
+    }
+}
+
+impl Parse for Rectangle {
+    const READER: &'static str = "Microsoft.Xna.Framework.Content.RectangleReader";
+    fn try_parse(rdr: &mut Read, _readers: &[TypeReader], _args: Vec<&str>) -> Result<Self, Error> {
+        Rectangle::new(rdr)
+    }
+}
+
+impl Parse for i32 {
+    const READER: &'static str = "Microsoft.Xna.Framework.Content.Int32Reader";
+    fn try_parse(rdr: &mut Read, _readers: &[TypeReader], _args: Vec<&str>) -> Result<Self, Error> {
+        rdr.read_i32::<LittleEndian>().map_err(Error::from)
+    }
+}
+
+impl Parse for char {
+    const READER: &'static str = "Microsoft.Xna.Framework.Content.CharReader";
+    fn try_parse(rdr: &mut Read, _readers: &[TypeReader], _args: Vec<&str>) -> Result<Self, Error> {
+        rdr.read_u8().map(|b| b as char).map_err(Error::from)
+    }
+}
+
+impl Parse for String {
+    const READER: &'static str = "Microsoft.Xna.Framework.Content.StringReader";
+    fn try_parse(rdr: &mut Read, _readers: &[TypeReader], _args: Vec<&str>) -> Result<Self, Error> {
+        read_string(rdr)
+    }
+}
+
+impl Parse for SpriteFont {
+    const READER: &'static str = "Microsoft.Xna.Framework.Content.SpriteFontReader";
+    fn try_parse(rdr: &mut Read, readers: &[TypeReader], _args: Vec<&str>) -> Result<Self, Error> {
+        SpriteFont::new(rdr, readers)
+    }
+}
+
+impl Parse for Vector3 {
+    const READER: &'static str = "Microsoft.Xna.Framework.Content.Vector3Reader";
+    fn try_parse(rdr: &mut Read, _readers: &[TypeReader], _args: Vec<&str>) -> Result<Self, Error> {
+        Ok(Vector3(try!(rdr.read_f32::<LittleEndian>()),
+                   try!(rdr.read_f32::<LittleEndian>()),
+                   try!(rdr.read_f32::<LittleEndian>())))
+    }
+}
+
+fn read_with_reader<T: Parse>(name: &str, rdr: &mut Read, readers: &[TypeReader]) -> Result<T, Error> {
     let main = name.split('`').next().unwrap().split(',').next().unwrap();
     let args = generic_types_from_reader(name);
     //println!("reading with {:?}", name);
-    Ok(match main {
-        "Microsoft.Xna.Framework.Content.Texture2DReader" =>
-            Asset::Texture2d(try!(Texture2d::new(rdr))),
-        "Microsoft.Xna.Framework.Content.DictionaryReader" => {
-            //println!("{:?}", args);
-            Asset::Dictionary(try!(Dictionary::new(args[0], args[1], rdr, readers)))
-        }
-        "Microsoft.Xna.Framework.Content.ArrayReader" |
-        "Microsoft.Xna.Framework.Content.ListReader" => {
-            //println!("{:?}", args);
-            Asset::Array(try!(Array::new(args[0], rdr, readers)))
-        }
-        "Microsoft.Xna.Framework.Content.Vector3Reader" =>
-            Asset::Vector3(try!(rdr.read_f32::<LittleEndian>()),
-                           try!(rdr.read_f32::<LittleEndian>()),
-                           try!(rdr.read_f32::<LittleEndian>())),
-        "Microsoft.Xna.Framework.Content.StringReader" =>
-            Asset::String(try!(read_string(rdr))),
-        "Microsoft.Xna.Framework.Content.Int32Reader" =>
-            Asset::Int(try!(rdr.read_i32::<LittleEndian>())),
-        "Microsoft.Xna.Framework.Content.CharReader" =>
-            Asset::Char(try!(rdr.read_u8()) as char), //XXXjdm should be full UTF-8 char read
-        "Microsoft.Xna.Framework.Content.RectangleReader" =>
-            Asset::Rectangle(try!(Rectangle::new(rdr))),
-        "Microsoft.Xna.Framework.Content.SpriteFontReader" =>
-            Asset::Font(try!(SpriteFont::new(rdr, readers))),
-        "xTile.Pipeline.TideReader" => /*, xTile */
-            Asset::Tide(try!(tide::read_tide(rdr))),
-        _ => return Err(Error::UnknownReader(name.into())),
-    })
+    T::parse(main, rdr, readers, args)
 }
 
 #[derive(Debug)]
-pub struct Array {
-    pub vec: Vec<Asset>,
+pub struct Array<T> {
+    pub vec: Vec<T>,
 }
 
 #[derive(Debug)]
-pub struct Dictionary {
-    pub map: HashMap<DictionaryKey, Asset>,
+pub struct Dictionary<K: Eq + Hash, V> {
+    pub map: HashMap<K, V>,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -110,8 +165,8 @@ fn reader_from_type(typename: &str) -> Option<&'static str> {
     }
 }
 
-fn read_dictionary_member<R: Read>(typename: &str, rdr: &mut R, readers: &[TypeReader])
-                                   -> Result<Asset, Error> {
+fn read_dictionary_member<T: Parse>(typename: &str, rdr: &mut Read, readers: &[TypeReader])
+                                   -> Result<T, Error> {
     //println!("checking {}" ,typename);
     if let Some(reader) = reader_from_type(typename) {
         read_with_reader(reader, rdr, readers)
@@ -120,44 +175,25 @@ fn read_dictionary_member<R: Read>(typename: &str, rdr: &mut R, readers: &[TypeR
     }
 }
 
-fn key_from_asset(asset: Asset) -> DictionaryKey {
-    match asset {
-        Asset::Int(i) => DictionaryKey::Int(i),
-        Asset::String(s) => DictionaryKey::String(s),
-        a => panic!("unsupported dictionary key {:?}", a)
-    }
-}
-
-impl Dictionary {
-    fn new<R: Read>(keytype: &str,
-                    valtype: &str,
-                    rdr: &mut R,
-                    readers: &[TypeReader]) -> Result<Dictionary, Error> {
+impl<K: Parse + Eq + Hash, V: Parse> Dictionary<K, V> {
+    fn new(
+        keytype: &str,
+        valtype: &str,
+        rdr: &mut Read,
+        readers: &[TypeReader]
+    ) -> Result<Dictionary<K, V>, Error>
+    {
         let count = try!(rdr.read_u32::<LittleEndian>());
         let mut map = HashMap::new();
         for _ in 0..count {
             //println!("getting item {}/{}", i + 1, count);
-            let key = key_from_asset(try!(read_dictionary_member(keytype, rdr, readers)));
+            let key = try!(read_dictionary_member(keytype, rdr, readers));
             let value = try!(read_dictionary_member(valtype, rdr, readers));
             //println!("got {:?} => {:?}", key, value);
             map.insert(key, value);
         }
         Ok(Dictionary {
             map: map,
-        })
-    }
-}
-
-impl Array {
-    fn new<R: Read>(typename: &str, rdr: &mut R, readers: &[TypeReader]) -> Result<Array, Error> {
-        let count = try!(rdr.read_u32::<LittleEndian>());
-        let mut vec = vec![];
-        for _ in 0..count {
-            let val = try!(read_dictionary_member(typename, rdr, readers));
-            vec.push(val);
-        }
-        Ok(Array {
-            vec: vec,
         })
     }
 }
@@ -223,7 +259,7 @@ pub struct Texture2d {
 }
 
 impl Texture2d {
-    fn new<R: Read>(rdr: &mut R) -> Result<Texture2d, Error> {
+    fn new(rdr: &mut Read) -> Result<Texture2d, Error> {
         let format = try!(SurfaceFormat::from(try!(rdr.read_u32::<LittleEndian>())));
         let w = try!(rdr.read_u32::<LittleEndian>()) as usize;
         let h = try!(rdr.read_u32::<LittleEndian>()) as usize;
@@ -252,52 +288,21 @@ pub struct SpriteFont {
     pub char_map: Vec<char>,
     pub v_spacing: i32,
     pub h_spacing: f32,
-    pub kerning: Vec<(f32, f32, f32)>,
+    pub kerning: Vec<Vector3>,
     pub default: Option<char>,
 }
 
-fn extract_rects(v: Vec<Asset>) -> Vec<Rectangle> {
-    v.into_iter().map(|e| match e {
-        Asset::Rectangle(r) => r,
-        _ => panic!("Unexpected asset in vector of rectangles"),
-    }).collect()
-}
-
 impl SpriteFont {
-    fn new<R: Read>(rdr: &mut R, readers: &[TypeReader]) -> Result<SpriteFont, Error> {
-        let texture = match try!(read_object(rdr, readers)) {
-            Asset::Texture2d(t) => t,
-            _ => panic!("Unexpected asset for texture"),
-        };
-        let glyphs = match try!(read_object(rdr, readers)) {
-            Asset::Array(a) => extract_rects(a.vec),
-            _ => panic!("Unexpected asset for glyphs"),
-        };
-        let cropping = match try!(read_object(rdr, readers)) {
-            Asset::Array(a) => extract_rects(a.vec),
-            _ => panic!("Unexpected asset for cropping"),
-        };
-        let char_map = match try!(read_object(rdr, readers)) {
-            Asset::Array(a) => a.vec.into_iter().map(|e| match e {
-                Asset::Char(c) => c,
-                _ => panic!("Unexpected asset in vector of chars"),
-            }).collect(),
-            _ => panic!("Unexpected asset for char_map"),
-        };
+    fn new(rdr: &mut Read, readers: &[TypeReader]) -> Result<SpriteFont, Error> {
+        let texture = try!(read_object::<Texture2d>(rdr, readers));
+        let glyphs = try!(read_object::<Vec<Rectangle>>(rdr, readers));
+        let cropping = try!(read_object::<Vec<Rectangle>>(rdr, readers));
+        let char_map = try!(read_object::<Vec<char>>(rdr, readers));
         let v_spacing = try!(rdr.read_i32::<LittleEndian>());
         let h_spacing = try!(rdr.read_f32::<LittleEndian>());
-        let kerning = match try!(read_object(rdr, readers)) {
-            Asset::Array(a) => a.vec.into_iter().map(|e| match e {
-                Asset::Vector3(x, y, z) => (x, y, z),
-                _ => panic!("Unexpected asset in vector of vec3"),
-            }).collect(),
-            _ => panic!("Unexpected asset for kerning"),
-        };
+        let kerning = try!(read_object::<Vec<Vector3>>(rdr, readers));
         //XXXjdm should be full UTF-8 char read
-        let default = try!(read_nullable(rdr, |rdr| rdr.read_u8().map(|b| Asset::Char(b as char)).map_err(Error::Io))).map(|a| match a {
-            Asset::Char(c) => c,
-            _ => panic!("Unexpected asset in nullable char"),
-        });
+        let default = try!(read_nullable::<char, _>(rdr, |rdr| rdr.read_u8().map(|b| b as char).map_err(Error::Io)));
         Ok(SpriteFont {
             texture: texture,
             glyphs: glyphs,
@@ -320,7 +325,7 @@ pub struct Rectangle {
 }
 
 impl Rectangle {
-    fn new<R: Read>(rdr: &mut R) -> Result<Rectangle, Error> {
+    fn new(rdr: &mut Read) -> Result<Rectangle, Error> {
         Ok(Rectangle {
             x: try!(rdr.read_i32::<LittleEndian>()),
             y: try!(rdr.read_i32::<LittleEndian>()),
@@ -331,26 +336,14 @@ impl Rectangle {
 }
 
 #[derive(Debug)]
-pub enum Asset {
-    Null,
-    Texture2d(Texture2d),
-    Tide(tide::Map),
-    Dictionary(Dictionary),
-    Array(Array),
-    String(String),
-    Int(i32),
-    Char(char),
-    Vector3(f32, f32, f32),
-    Font(SpriteFont),
-    Rectangle(Rectangle),
+pub struct Vector3(f32, f32, f32);
+
+pub struct XNB<T> {
+    pub primary: T,
 }
 
-pub struct XNB {
-    pub primary: Asset,
-}
-
-impl XNB {
-    fn new(buffer: Vec<u8>) -> Result<XNB, Error> {
+impl<T: Parse> XNB<T> {
+    fn new(buffer: Vec<u8>) -> Result<XNB<T>, Error> {
         let mut rdr = Cursor::new(&buffer);
         let num_readers = try!(read_7bit_encoded_int(&mut rdr));
         let mut readers = vec![];
@@ -370,15 +363,13 @@ impl XNB {
     }
 }
 
-fn read_object<R: Read>(rdr: &mut R, readers: &[TypeReader]) -> Result<Asset, Error> {
+fn read_object<T: Parse>(rdr: &mut Read, readers: &[TypeReader]) -> Result<T, Error> {
     let id = try!(read_7bit_encoded_int(rdr)) as usize;
-    if id == 0 {
-        return Ok(Asset::Null);
-    }
+    assert!(id != 0);
     read_with_reader(&readers[id - 1].name, rdr, readers)
 }
 
-fn read_nullable<R: Read, F: Fn(&mut R) -> Result<Asset, Error>>(rdr: &mut R, value: F) -> Result<Option<Asset>, Error> {
+fn read_nullable<T: Parse, F: Fn(&mut Read) -> Result<T, Error>>(rdr: &mut Read, value: F) -> Result<Option<T>, Error> {
     let has_value = try!(rdr.read_u8()) == 1;
     if !has_value {
         return Ok(None);
@@ -394,7 +385,7 @@ pub enum Error {
     CompressedXnb,
     UnknownReader(String),
     UnrecognizedSurfaceFormat(u32),
-    UnexpectedObject(Asset),
+    ReaderMismatch(String, String),
 }
 
 impl From<IoError> for Error {
@@ -403,12 +394,12 @@ impl From<IoError> for Error {
     }
 }
 
-fn read_string<R: Read>(rdr: &mut R) -> Result<String, Error> {
+fn read_string(rdr: &mut Read) -> Result<String, Error> {
     let len = try!(read_7bit_encoded_int(rdr));
     read_string_with_length(rdr, len)
 }
 
-fn read_string_with_length<R: Read>(rdr: &mut R, len: u32) -> Result<String, Error> {
+fn read_string_with_length(rdr: &mut Read, len: u32) -> Result<String, Error> {
     let mut s = String::new();
     for _ in 0..len {
         let val = try!(rdr.read_u8());
@@ -419,7 +410,7 @@ fn read_string_with_length<R: Read>(rdr: &mut R, len: u32) -> Result<String, Err
 }
 
 #[allow(dead_code)]
-fn read_7bit_encoded_int<R: Read>(rdr: &mut R) -> Result<u32, Error> {
+fn read_7bit_encoded_int(rdr: &mut Read) -> Result<u32, Error> {
     let mut result = 0;
     let mut bits_read = 0;
     loop {
@@ -432,21 +423,21 @@ fn read_7bit_encoded_int<R: Read>(rdr: &mut R) -> Result<u32, Error> {
     }
 }
 
-impl XNB {
-    fn decompress<R: Read>(_rdr: R,
-                           _compressed_size: usize,
-                           _decompressed_size: usize) -> Result<Vec<u8>, Error> {
+impl<T: Parse> XNB<T> {
+    fn decompress(_rdr: &Read,
+                  _compressed_size: usize,
+                  _decompressed_size: usize) -> Result<Vec<u8>, Error> {
         //lzx::decompress(rdr, compressed_size, decompressed_size).map_err(|e| Error::Decompress(e))
         Err(Error::CompressedXnb)
     }
 
-    fn from_uncompressed_buffer<R: Read>(mut rdr: R) -> Result<XNB, Error> {
+    fn from_uncompressed_buffer(rdr: &mut Read) -> Result<XNB<T>, Error> {
         let mut buffer = vec![];
         try!(rdr.read_to_end(&mut buffer));
         XNB::new(buffer)
     }
 
-    pub fn from_buffer<R: Read>(mut rdr: R) -> Result<XNB, Error> {
+    pub fn from_buffer(rdr: &mut Read) -> Result<XNB<T>, Error> {
         let mut header = vec![0, 0, 0];
         try!(rdr.read_exact(&mut header));
         if header != b"XNB" {
@@ -469,10 +460,10 @@ impl XNB {
         
         if is_compressed {
             let decompressed_size = try!(rdr.read_u32::<LittleEndian>());
-            let buffer = try!(XNB::decompress(rdr,
+            let buffer = try!(Self::decompress(rdr,
                                               compressed_size as usize - 14,
                                               decompressed_size as usize));
-            XNB::from_uncompressed_buffer(Cursor::new(&buffer))
+            XNB::from_uncompressed_buffer(&mut Cursor::new(&buffer))
         } else {
             XNB::from_uncompressed_buffer(rdr)
         }

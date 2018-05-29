@@ -1,5 +1,5 @@
 use byteorder::{LittleEndian, ReadBytesExt};
-use {read_string_with_length, Error};
+use {read_string_with_length, Error, Parse, TypeReader};
 use std::io::{Read, Cursor};
 
 #[derive(Debug)]
@@ -83,6 +83,13 @@ pub struct Map {
     pub properties: Vec<(String, PropertyValue)>,
 }
 
+impl Parse for Map {
+    const READER: &'static str = "xTile.Pipeline.TideReader";
+    fn try_parse(rdr: &mut Read, _readers: &[TypeReader], _args: Vec<&str>) -> Result<Self, Error> {
+        read_tide(rdr)
+    }
+}
+
 #[derive(Debug)]
 pub struct Layer {
     pub id: String,
@@ -131,7 +138,7 @@ pub struct AnimatedTile {
     pub properties: Vec<(String, PropertyValue)>,
 }
 
-pub fn read_tide<R: Read>(rdr: &mut R) -> Result<Map, Error> {
+pub fn read_tide(rdr: &mut Read) -> Result<Map, Error> {
     let size = try!(rdr.read_u32::<LittleEndian>());
     let mut buf = vec![0; size as usize];
     try!(rdr.read(&mut buf));
