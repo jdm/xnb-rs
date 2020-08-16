@@ -22,23 +22,23 @@ pub enum PropertyValue {
     String(String),
 }
 
-fn read_tide_string(rdr: &mut Read) -> Result<String, Error> {
-    let len = try!(rdr.read_u32::<LittleEndian>());
+fn read_tide_string(rdr: &mut dyn Read) -> Result<String, Error> {
+    let len = rdr.read_u32::<LittleEndian>()?;
     read_string_with_length(rdr, len)
 }
 
-fn read_tide_properties(rdr: &mut Read) -> Result<Vec<(String, PropertyValue)>, Error> {
-    let num_properties = try!(rdr.read_u32::<LittleEndian>());
+fn read_tide_properties(rdr: &mut dyn Read) -> Result<Vec<(String, PropertyValue)>, Error> {
+    let num_properties = rdr.read_u32::<LittleEndian>()?;
 
     let mut props = vec![];
     for _ in 0..num_properties {
-        let name = try!(read_tide_string(rdr));
+        let name = read_tide_string(rdr)?;
 
-        let value = match try!(rdr.read_u8()) {
-            0 => PropertyValue::Bool(try!(rdr.read_u8()) != 0),
-            1 => PropertyValue::Int(try!(rdr.read_i32::<LittleEndian>())),
-            2 => PropertyValue::Float(try!(rdr.read_f32::<LittleEndian>())),
-            3 => PropertyValue::String(try!(read_tide_string(rdr))),
+        let value = match rdr.read_u8()? {
+            0 => PropertyValue::Bool(rdr.read_u8()? != 0),
+            1 => PropertyValue::Int(rdr.read_i32::<LittleEndian>()?),
+            2 => PropertyValue::Float(rdr.read_f32::<LittleEndian>()?),
+            3 => PropertyValue::String(read_tide_string(rdr)?),
             _ => unreachable!("unexpected property type"),
         };
         props.push((name, value));
@@ -55,10 +55,10 @@ pub struct StaticTile<T> {
     pub properties: T,
 }
 
-fn read_static_tile<T: PropertyParse>(rdr: &mut Read, tilesheet: String, pos: (u32, u32)) -> Result<StaticTile<T>, Error> {
-    let idx = try!(rdr.read_u32::<LittleEndian>());
-    let blend_mode = try!(rdr.read_u8());
-    let properties = T::parse(try!(read_tide_properties(rdr)));
+fn read_static_tile<T: PropertyParse>(rdr: &mut dyn Read, tilesheet: String, pos: (u32, u32)) -> Result<StaticTile<T>, Error> {
+    let idx = rdr.read_u32::<LittleEndian>()?;
+    let blend_mode = rdr.read_u8()?;
+    let properties = T::parse(read_tide_properties(rdr)?);
     Ok(StaticTile {
         idx: idx,
         tilesheet: tilesheet,
@@ -95,7 +95,7 @@ impl<T, U, V, W> Map<T, U, V, W> {
 
 impl<T: PropertyParse, U: PropertyParse, V: PropertyParse, W: PropertyParse> Parse for Map<T, U, V, W> {
     const READER: &'static str = "xTile.Pipeline.TideReader";
-    fn try_parse(rdr: &mut Read, _readers: &[TypeReader], _args: Vec<&str>) -> Result<Self, Error> {
+    fn try_parse(rdr: &mut dyn Read, _readers: &[TypeReader], _args: Vec<&str>) -> Result<Self, Error> {
         read_tide(rdr)
     }
 }
@@ -156,67 +156,67 @@ pub struct AnimatedTile<T> {
 }
 
 pub fn read_tide<T, U, V, W>(
-    rdr: &mut Read
+    rdr: &mut dyn Read
 ) -> Result<Map<T, U, V, W>, Error>
     where T: PropertyParse,
           U: PropertyParse,
           V: PropertyParse,
           W: PropertyParse,
 {
-    let size = try!(rdr.read_u32::<LittleEndian>());
+    let size = rdr.read_u32::<LittleEndian>()?;
     let mut buf = vec![0; size as usize];
-    try!(rdr.read(&mut buf));
+    rdr.read(&mut buf)?;
 
     let mut rdr = Cursor::new(&buf);
 
     let mut header = vec![0; 6];
-    try!(rdr.read(&mut header));
+    rdr.read(&mut header)?;
     if header != b"tBIN10" {
         return Err(Error::Void);
     }
 
-    let map_id = try!(read_tide_string(&mut rdr));
+    let map_id = read_tide_string(&mut rdr)?;
     println!("{}", map_id);
 
-    let map_description = try!(read_tide_string(&mut rdr));
+    let map_description = read_tide_string(&mut rdr)?;
     if !map_description.is_empty() {
         println!("{}", map_description);
     }
 
-    let properties = T::parse(try!(read_tide_properties(&mut rdr)));
+    let properties = T::parse(read_tide_properties(&mut rdr)?);
 
     let mut tilesheets = vec![];
 
-    let num_tilesheets = try!(rdr.read_u32::<LittleEndian>());
+    let num_tilesheets = rdr.read_u32::<LittleEndian>()?;
     for _ in 0..num_tilesheets {
-        let tilesheet_name = try!(read_tide_string(&mut rdr));
+        let tilesheet_name = read_tide_string(&mut rdr)?;
         println!("{}", tilesheet_name);
 
-        let description = try!(read_tide_string(&mut rdr));
+        let description = read_tide_string(&mut rdr)?;
         if !description.is_empty() {
             println!("{}", description);
         }
 
-        let source = try!(read_tide_string(&mut rdr));
+        let source = read_tide_string(&mut rdr)?;
         println!("{}", source);
 
-        let sheet_width = try!(rdr.read_u32::<LittleEndian>());
-        let sheet_height = try!(rdr.read_u32::<LittleEndian>());
+        let sheet_width = rdr.read_u32::<LittleEndian>()?;
+        let sheet_height = rdr.read_u32::<LittleEndian>()?;
         println!("{}x{}", sheet_width, sheet_height);
 
-        let tile_w = try!(rdr.read_u32::<LittleEndian>());
-        let tile_h = try!(rdr.read_u32::<LittleEndian>());
+        let tile_w = rdr.read_u32::<LittleEndian>()?;
+        let tile_h = rdr.read_u32::<LittleEndian>()?;
         println!("{}x{}", tile_w, tile_h);
 
-        let margin_w = try!(rdr.read_u32::<LittleEndian>());
-        let margin_h = try!(rdr.read_u32::<LittleEndian>());
+        let margin_w = rdr.read_u32::<LittleEndian>()?;
+        let margin_h = rdr.read_u32::<LittleEndian>()?;
         println!("{}x{}", margin_w, margin_h);
 
-        let spacing_w = try!(rdr.read_u32::<LittleEndian>());
-        let spacing_h = try!(rdr.read_u32::<LittleEndian>());
+        let spacing_w = rdr.read_u32::<LittleEndian>()?;
+        let spacing_h = rdr.read_u32::<LittleEndian>()?;
         println!("{}x{}", spacing_w, spacing_h);
 
-        let properties = U::parse(try!(read_tide_properties(&mut rdr)));
+        let properties = U::parse(read_tide_properties(&mut rdr)?);
         tilesheets.push(TileSheet {
             id: tilesheet_name,
             description: description,
@@ -231,27 +231,27 @@ pub fn read_tide<T, U, V, W>(
 
     let mut layers = vec![];
 
-    let num_layers = try!(rdr.read_u32::<LittleEndian>());
+    let num_layers = rdr.read_u32::<LittleEndian>()?;
     for _ in 0..num_layers {
         println!("---");
 
-        let layer_id = try!(read_tide_string(&mut rdr));
+        let layer_id = read_tide_string(&mut rdr)?;
         println!("{}", layer_id);
 
-        let visible = try!(rdr.read_u8()) != 0;
+        let visible = rdr.read_u8()? != 0;
         println!("{}", if visible { "visible" } else { "invisible"});
-        let description = try!(read_tide_string(&mut rdr));
+        let description = read_tide_string(&mut rdr)?;
         if !description.is_empty() {
             println!("{}", description);
         }
-        let layer_w = try!(rdr.read_u32::<LittleEndian>());
-        let layer_h = try!(rdr.read_u32::<LittleEndian>());
+        let layer_w = rdr.read_u32::<LittleEndian>()?;
+        let layer_h = rdr.read_u32::<LittleEndian>()?;
         println!("{}x{}", layer_w, layer_h);
-        let tile_w = try!(rdr.read_u32::<LittleEndian>());
-        let tile_h = try!(rdr.read_u32::<LittleEndian>());
+        let tile_w = rdr.read_u32::<LittleEndian>()?;
+        let tile_h = rdr.read_u32::<LittleEndian>()?;
         println!("{}x{}", tile_w, tile_h);
 
-        let properties = V::parse(try!(read_tide_properties(&mut rdr)));
+        let properties = V::parse(read_tide_properties(&mut rdr)?);
 
         let mut tiles = vec![];
         let mut tileset = None;
@@ -260,35 +260,35 @@ pub fn read_tide<T, U, V, W>(
         while y < layer_h {
             let mut x = 0;
             while x < layer_w {
-                match try!(rdr.read_u8()) as char {
+                match rdr.read_u8()? as char {
                     'T' => {
-                        tileset = Some(try!(read_tide_string(&mut rdr)));
+                        tileset = Some(read_tide_string(&mut rdr)?);
                     }
                     'S' => {
-                        tiles.push(Tile::Static(try!(read_static_tile(&mut rdr, tileset.clone().unwrap(), (x, y)))));
+                        tiles.push(Tile::Static(read_static_tile(&mut rdr, tileset.clone().unwrap(), (x, y))?));
                         x += 1;
                     }
                     'N' => {
-                        x += try!(rdr.read_u32::<LittleEndian>());
+                        x += rdr.read_u32::<LittleEndian>()?;
                     }
                     'A' => {
-                        let interval = try!(rdr.read_u32::<LittleEndian>());
-                        let frame_count = try!(rdr.read_u32::<LittleEndian>());
+                        let interval = rdr.read_u32::<LittleEndian>()?;
+                        let frame_count = rdr.read_u32::<LittleEndian>()?;
                         let mut frames = vec![];
                         let mut frame = 0;
                         while frame < frame_count {
-                            match try!(rdr.read_u8()) as char {
+                            match rdr.read_u8()? as char {
                                 'T' => {
-                                    tileset = Some(try!(read_tide_string(&mut rdr)));
+                                    tileset = Some(read_tide_string(&mut rdr)?);
                                 }
                                 'S' => {
-                                    frames.push(try!(read_static_tile(&mut rdr, tileset.clone().unwrap(), (x, y))));
+                                    frames.push(read_static_tile(&mut rdr, tileset.clone().unwrap(), (x, y))?);
                                     frame += 1;
                                 }
                                 _ => unreachable!("unexpected animated frame type"),
                             }
                         }
-                        let properties = W::parse(try!(read_tide_properties(&mut rdr)));
+                        let properties = W::parse(read_tide_properties(&mut rdr)?);
                         tiles.push(Tile::Animated(AnimatedTile {
                             interval: interval,
                             frames: frames,
