@@ -1,6 +1,6 @@
+use crate::{read_string_with_length, Error, Parse, TypeReader};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::{Cursor, Read};
-use {read_string_with_length, Error, Parse, TypeReader};
 
 #[derive(Debug)]
 pub struct TileSheet<T> {
