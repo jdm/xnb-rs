@@ -29,6 +29,25 @@ impl Dumpable for xnb::Texture2d {
     }
 }
 
+impl Dumpable for xnb::SpriteFont {
+    fn dump(self) {
+        dump_texture(self.texture);
+        println!("glyphs, cropping, char_map:");
+        for ((g, c), m) in self
+            .glyphs
+            .into_iter()
+            .zip(self.cropping.into_iter())
+            .zip(self.char_map.into_iter())
+        {
+            println!("{:?} {:?} {}", g, c, m);
+        }
+        println!("v_space: {}", self.v_spacing);
+        println!("h_space: {}", self.h_spacing);
+        println!("kerning: {} elements", self.kerning.len());
+        println!("default: {:?}", self.default);
+    }
+}
+
 impl<T: std::fmt::Debug> Dumpable for Vec<T> {
     fn dump(self) {
         print!("[");
@@ -78,6 +97,7 @@ fn main() {
     let result = match &*typ {
         "texture2d" => dump_xnb::<xnb::Texture2d>(xnb),
         "stringarray" => dump_xnb::<Vec<String>>(xnb),
+        "spritefont" => dump_xnb::<xnb::SpriteFont>(xnb),
         typ => unimplemented!("No support for \"{}\" XNBs", typ),
     };
 
