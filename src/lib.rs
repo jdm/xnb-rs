@@ -6,8 +6,9 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::io::{Cursor, Error as IoError, Read};
 
+pub use lzxd::WindowSize;
+
 pub mod tide;
-//mod lzx;
 
 #[derive(Debug)]
 pub struct TypeReader {
@@ -397,6 +398,63 @@ impl Rectangle {
 #[derive(Debug)]
 pub struct Vector3(f32, f32, f32);
 
+pub struct UncompressedXNB<'a>(&'a mut dyn Read);
+pub struct CompressedXNB<'a>(&'a mut dyn Read, usize);
+
+impl<'a> UncompressedXNB<'a> {
+    pub fn xnb<T: Parse>(self) -> Result<XNB<T>, Error> {
+        XNB::from_uncompressed_buffer(self.0)
+    }
+}
+
+impl<'a> CompressedXNB<'a> {
+    pub fn xnb<T: Parse>(self, window_size: WindowSize) -> Result<XNB<T>, Error> {
+        let decompressed_size = self.0.read_u32::<LittleEndian>()?;
+        let buffer =
+            XNB::<T>::decompress(self.0, window_size, self.1 - 14, decompressed_size as usize)?;
+        XNB::from_uncompressed_buffer(&mut Cursor::new(&buffer))
+    }
+}
+
+pub enum MaybeCompressedXNB<'a> {
+    Uncompressed(UncompressedXNB<'a>),
+    Compressed(CompressedXNB<'a>),
+}
+
+impl<'a> MaybeCompressedXNB<'a> {
+    pub fn from_buffer(rdr: &'a mut dyn Read) -> Result<MaybeCompressedXNB<'a>, Error> {
+        let mut header = vec![0, 0, 0];
+        rdr.read_exact(&mut header)?;
+        if header != b"XNB" {
+            return Err(Error::Void);
+        }
+        let target = rdr.read_u8()?;
+        if ['w', 'm', 'x']
+            .iter()
+            .find(|&b| *b == target as char)
+            .is_none()
+        {
+            return Err(Error::Void);
+        }
+
+        let version = rdr.read_u8()?;
+        if version != 5 {
+            return Err(Error::Void);
+        }
+
+        let flag = rdr.read_u8()?;
+        let is_compressed = flag & 0x80 != 0;
+
+        let compressed_size = rdr.read_u32::<LittleEndian>()?;
+
+        Ok(if is_compressed {
+            MaybeCompressedXNB::Compressed(CompressedXNB(rdr, compressed_size as usize))
+        } else {
+            MaybeCompressedXNB::Uncompressed(UncompressedXNB(rdr))
+        })
+    }
+}
+
 pub struct XNB<T> {
     pub primary: T,
 }
@@ -441,11 +499,16 @@ fn read_nullable<T: Parse, F: Fn(&mut dyn Read) -> Result<T, Error>>(
 pub enum Error {
     Void,
     Io(IoError),
-    //Decompress(lzx::Error),
-    CompressedXnb,
+    Decompress(lzxd::DecodeFailed),
     UnknownReader(String),
     UnrecognizedSurfaceFormat(u32),
     ReaderMismatch(String, String),
+}
+
+impl From<lzxd::DecodeFailed> for Error {
+    fn from(e: lzxd::DecodeFailed) -> Error {
+        Error::Decompress(e)
+    }
 }
 
 impl From<IoError> for Error {
@@ -485,55 +548,38 @@ fn read_7bit_encoded_int(rdr: &mut dyn Read) -> Result<u32, Error> {
 
 impl<T: Parse> XNB<T> {
     fn decompress(
-        _rdr: &dyn Read,
+        rdr: &mut dyn Read,
+        window_size: WindowSize,
         _compressed_size: usize,
         _decompressed_size: usize,
     ) -> Result<Vec<u8>, Error> {
-        //lzx::decompress(rdr, compressed_size, decompressed_size).map_err(|e| Error::Decompress(e))
-        Err(Error::CompressedXnb)
+        let mut lzxd = lzxd::Lzxd::new(window_size);
+        let mut compressed = vec![];
+        rdr.read_to_end(&mut compressed)?;
+        let chunk_size = 2usize.pow(match window_size {
+            WindowSize::KB32 => 15,
+            WindowSize::KB64 => 16,
+            WindowSize::KB128 => 17,
+            WindowSize::KB256 => 18,
+            WindowSize::KB512 => 19,
+            WindowSize::MB1 => 20,
+            WindowSize::MB2 => 21,
+            WindowSize::MB4 => 22,
+            WindowSize::MB8 => 23,
+            WindowSize::MB16 => 24,
+            WindowSize::MB32 => 25,
+        });
+        let mut decompressed_body = vec![];
+        for chunk in compressed.chunks(chunk_size) {
+            let decompressed = lzxd.decompress_next(&chunk)?;
+            decompressed_body.extend(&decompressed[..]);
+        }
+        Ok(decompressed_body)
     }
 
     fn from_uncompressed_buffer(rdr: &mut dyn Read) -> Result<XNB<T>, Error> {
         let mut buffer = vec![];
         rdr.read_to_end(&mut buffer)?;
         XNB::new(buffer)
-    }
-
-    pub fn from_buffer(rdr: &mut dyn Read) -> Result<XNB<T>, Error> {
-        let mut header = vec![0, 0, 0];
-        rdr.read_exact(&mut header)?;
-        if header != b"XNB" {
-            return Err(Error::Void);
-        }
-        let target = rdr.read_u8()?;
-        if ['w', 'm', 'x']
-            .iter()
-            .find(|&b| *b == target as char)
-            .is_none()
-        {
-            return Err(Error::Void);
-        }
-
-        let version = rdr.read_u8()?;
-        if version != 5 {
-            return Err(Error::Void);
-        }
-
-        let flag = rdr.read_u8()?;
-        let is_compressed = flag & 0x80 != 0;
-
-        let compressed_size = rdr.read_u32::<LittleEndian>()?;
-
-        if is_compressed {
-            let decompressed_size = rdr.read_u32::<LittleEndian>()?;
-            let buffer = Self::decompress(
-                rdr,
-                compressed_size as usize - 14,
-                decompressed_size as usize,
-            )?;
-            XNB::from_uncompressed_buffer(&mut Cursor::new(&buffer))
-        } else {
-            XNB::from_uncompressed_buffer(rdr)
-        }
     }
 }

@@ -6,8 +6,9 @@ license = "MIT"
 edition = "2018"
 
 [dependencies]
-byteorder = "0.5"
+byteorder = "1"
 bitreader = "0.1"
+lzxd = "0.1"
 
 [dev_dependencies]
 image = "0.10"
