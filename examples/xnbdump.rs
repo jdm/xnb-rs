@@ -2,13 +2,13 @@ extern crate image;
 extern crate squish;
 extern crate xnb;
 
-use image::{DynamicImage, ImageFormat, ImageBuffer};
+use image::{DynamicImage, ImageBuffer, ImageFormat};
+use squish::{decompress_image, CompressType};
 use std::env;
 use std::fs::File;
 use std::io::BufReader;
 use std::process;
-use squish::{decompress_image, CompressType};
-use xnb::{XNB, Asset, tide, Texture2d, SurfaceFormat};
+use xnb::{tide, Asset, SurfaceFormat, Texture2d, XNB};
 
 fn usage() {
     println!("xnbdump [file.xnb]");
@@ -86,7 +86,12 @@ fn main() {
         Asset::Font(f) => {
             dump_texture(f.texture);
             println!("glyphs, cropping, char_map:");
-            for ((g, c), m) in f.glyphs.into_iter().zip(f.cropping.into_iter()).zip(f.char_map.into_iter()) {
+            for ((g, c), m) in f
+                .glyphs
+                .into_iter()
+                .zip(f.cropping.into_iter())
+                .zip(f.char_map.into_iter())
+            {
                 println!("{:?} {:?} {}", g, c, m);
             }
             println!("v_space: {}", f.v_spacing);
@@ -142,18 +147,18 @@ fn dump_texture(texture: Texture2d) {
                 let dynamic_image = {
                     let data = match texture.format {
                         SurfaceFormat::Color => data,
-                        SurfaceFormat::Dxt3 => {
-                            decompress_image(texture.width as i32,
-                                             texture.height as i32,
-                                             data.as_ptr() as *const _,
-                                             CompressType::Dxt3)
-                        }
+                        SurfaceFormat::Dxt3 => decompress_image(
+                            texture.width as i32,
+                            texture.height as i32,
+                            data.as_ptr() as *const _,
+                            CompressType::Dxt3,
+                        ),
                         f => panic!("can't handle surface format {:?}", f),
                     };
 
-                    let img = ImageBuffer::from_raw(texture.width as u32,
-                                                    texture.height as u32,
-                                                    data).unwrap();
+                    let img =
+                        ImageBuffer::from_raw(texture.width as u32, texture.height as u32, data)
+                            .unwrap();
                     DynamicImage::ImageRgba8(img)
                 };
                 if let Err(e) = dynamic_image.save(&mut f, ImageFormat::PNG) {

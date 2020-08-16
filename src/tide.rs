@@ -1,6 +1,6 @@
 use byteorder::{LittleEndian, ReadBytesExt};
+use std::io::{Cursor, Read};
 use {read_string_with_length, Error, Parse, TypeReader};
-use std::io::{Read, Cursor};
 
 #[derive(Debug)]
 pub struct TileSheet<T> {
@@ -55,7 +55,11 @@ pub struct StaticTile<T> {
     pub properties: T,
 }
 
-fn read_static_tile<T: PropertyParse>(rdr: &mut dyn Read, tilesheet: String, pos: (u32, u32)) -> Result<StaticTile<T>, Error> {
+fn read_static_tile<T: PropertyParse>(
+    rdr: &mut dyn Read,
+    tilesheet: String,
+    pos: (u32, u32),
+) -> Result<StaticTile<T>, Error> {
     let idx = rdr.read_u32::<LittleEndian>()?;
     let blend_mode = rdr.read_u8()?;
     let properties = T::parse(read_tide_properties(rdr)?);
@@ -93,9 +97,15 @@ impl<T, U, V, W> Map<T, U, V, W> {
     }
 }
 
-impl<T: PropertyParse, U: PropertyParse, V: PropertyParse, W: PropertyParse> Parse for Map<T, U, V, W> {
+impl<T: PropertyParse, U: PropertyParse, V: PropertyParse, W: PropertyParse> Parse
+    for Map<T, U, V, W>
+{
     const READER: &'static str = "xTile.Pipeline.TideReader";
-    fn try_parse(rdr: &mut dyn Read, _readers: &[TypeReader], _args: Vec<&str>) -> Result<Self, Error> {
+    fn try_parse(
+        rdr: &mut dyn Read,
+        _readers: &[TypeReader],
+        _args: Vec<&str>,
+    ) -> Result<Self, Error> {
         read_tide(rdr)
     }
 }
@@ -121,7 +131,9 @@ impl<T> Tile<T> {
     pub fn get_index(&self, tick: u32) -> u32 {
         match *self {
             Tile::Static(ref tile) => tile.idx,
-            Tile::Animated(ref tile) => tile.frames[(tick / tile.interval) as usize % tile.frames.len()].idx,
+            Tile::Animated(ref tile) => {
+                tile.frames[(tick / tile.interval) as usize % tile.frames.len()].idx
+            }
         }
     }
 
@@ -155,13 +167,12 @@ pub struct AnimatedTile<T> {
     pub properties: T,
 }
 
-pub fn read_tide<T, U, V, W>(
-    rdr: &mut dyn Read
-) -> Result<Map<T, U, V, W>, Error>
-    where T: PropertyParse,
-          U: PropertyParse,
-          V: PropertyParse,
-          W: PropertyParse,
+pub fn read_tide<T, U, V, W>(rdr: &mut dyn Read) -> Result<Map<T, U, V, W>, Error>
+where
+    T: PropertyParse,
+    U: PropertyParse,
+    V: PropertyParse,
+    W: PropertyParse,
 {
     let size = rdr.read_u32::<LittleEndian>()?;
     let mut buf = vec![0; size as usize];
@@ -239,7 +250,7 @@ pub fn read_tide<T, U, V, W>(
         println!("{}", layer_id);
 
         let visible = rdr.read_u8()? != 0;
-        println!("{}", if visible { "visible" } else { "invisible"});
+        println!("{}", if visible { "visible" } else { "invisible" });
         let description = read_tide_string(&mut rdr)?;
         if !description.is_empty() {
             println!("{}", description);
@@ -265,7 +276,11 @@ pub fn read_tide<T, U, V, W>(
                         tileset = Some(read_tide_string(&mut rdr)?);
                     }
                     'S' => {
-                        tiles.push(Tile::Static(read_static_tile(&mut rdr, tileset.clone().unwrap(), (x, y))?));
+                        tiles.push(Tile::Static(read_static_tile(
+                            &mut rdr,
+                            tileset.clone().unwrap(),
+                            (x, y),
+                        )?));
                         x += 1;
                     }
                     'N' => {
@@ -282,7 +297,11 @@ pub fn read_tide<T, U, V, W>(
                                     tileset = Some(read_tide_string(&mut rdr)?);
                                 }
                                 'S' => {
-                                    frames.push(read_static_tile(&mut rdr, tileset.clone().unwrap(), (x, y))?);
+                                    frames.push(read_static_tile(
+                                        &mut rdr,
+                                        tileset.clone().unwrap(),
+                                        (x, y),
+                                    )?);
                                     frame += 1;
                                 }
                                 _ => unreachable!("unexpected animated frame type"),
@@ -310,7 +329,7 @@ pub fn read_tide<T, U, V, W>(
             size: (layer_w, layer_h),
             tile_size: (tile_w, tile_h),
             tiles: tiles,
-            properties: properties
+            properties: properties,
         });
     }
     Ok(Map {
